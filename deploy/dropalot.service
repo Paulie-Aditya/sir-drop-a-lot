@@ -1,0 +1,16 @@
+[Unit]
+Description=Dropalot Discord Bot
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/sir-drop-a-lot
+ExecStart=/home/ubuntu/sir-drop-a-lot/venv/bin/python /home/ubuntu/sir-drop-a-lot/app.py
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/ubuntu/sir-drop-a-lot/.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -33,3 +33,17 @@ Before it will work:
 `/randomdrops` options: `games` (`all` or a list such as `airdrop,mathtip,coinflip`), `currency` (one currency, or a list to pick from at random), `runs` (0 means run until stopped), `duration`, `winners`, `role`, `channel`, `start_now`.
 
 CoinDrop's own limits are built in: slowdrop always runs for 5s, quickdrop has no duration, `winners` only applies to airdrop/raffle/mathtip/triviadrop, and a raffle with no `winners` set defaults to `for 1`.
+
+## Deploying (EC2 / Ubuntu)
+
+```bash
+cd ~ && git clone https://github.com/Paulie-Aditya/sir-drop-a-lot.git && cd sir-drop-a-lot
+python3 -m venv venv && venv/bin/pip install -r requirements.txt
+cp .env.example .env && nano .env      # set DISCORD_TOKEN
+sudo cp deploy/dropalot.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now dropalot
+journalctl -u dropalot -f              # watch logs
+```
+
+To update: `git pull && venv/bin/pip install -r requirements.txt && sudo systemctl restart dropalot`.
+Jobs live in memory, so a restart clears them.
