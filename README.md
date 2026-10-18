@@ -9,7 +9,7 @@ Games it can pick from: `airdrop`, `raffle`, `mathtip`, `triviadrop`, `coinflip`
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-# put your token in .env: DISCORD_TOKEN=...
+cp .env.example .env   # then fill in DISCORD_TOKEN
 .venv/bin/python app.py
 ```
 
