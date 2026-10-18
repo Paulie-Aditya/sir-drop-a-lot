@@ -23,7 +23,7 @@ Before it will work:
 
 | Command | Who | What it does |
 |---|---|---|
-| `/randomdrops` | Manage Server | Starts a job that picks a random game, amount (USD, between min and max), currency, and delay (between min and max minutes) for each drop |
+| `/randomdrops` | Manage Server | Starts a job that picks a random game, amount (USD, up to 4 decimals, min $0.001), currency, and delay (between min and max minutes) for each drop |
 | `/dropnow` | Manage Server | Runs one game now (random, or a game you choose) |
 | `/jobs_list` | anyone | Lists this server's jobs |
 | `/pause_job <id>` | Manage Server | Pauses or resumes a job |

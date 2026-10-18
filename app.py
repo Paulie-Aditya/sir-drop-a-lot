@@ -40,6 +40,11 @@ GAMES = {
 SLOWDROP_DURATION = "5s"
 MIN_DURATION_SECONDS = 5
 
+# Amounts are USD; CoinDrop accepts sub-cent values like $0.0025.
+AMOUNT_DECIMALS = 4
+# Mirrors CoinDrop's config.MIN_TIP_AMOUNT -- smaller drops get rejected.
+MIN_DROP_USD = 0.001
+
 DURATION_UNITS = {"s": 1, "m": 60, "h": 3600}
 
 
@@ -105,12 +110,19 @@ def roll_interval(job: Job) -> int:
 
 
 def roll_amount(job: Job) -> float:
-    return round(random.uniform(job.min_amount, job.max_amount), 2)
+    return round(random.uniform(job.min_amount, job.max_amount), AMOUNT_DECIMALS)
+
+
+def format_usd(amount: float) -> str:
+    # Up to 4 decimals, trailing zeros trimmed but never below cents: 0.5 -> 0.50, 0.0025 -> 0.0025
+    text = f"{amount:.{AMOUNT_DECIMALS}f}".rstrip("0")
+    whole, _, frac = text.partition(".")
+    return f"${whole}.{frac.ljust(2, '0')}"
 
 
 def build_command(job: Job, game: str, amount: float, currency: str) -> str:
     rules = GAMES[game]
-    parts = [COINDROP, game, f"${amount:.2f}", currency]
+    parts = [COINDROP, game, format_usd(amount), currency]
 
     if rules["duration"]:
         parts.append(SLOWDROP_DURATION if game == "slowdrop" else job.duration)
@@ -163,7 +175,7 @@ def describe_job(job: Job) -> str:
     return (
         f"**#{job.id}** in <#{job.channel_id}> | {status} | {runs} runs left\n"
         f"  games: {', '.join(job.games)}\n"
-        f"  ${job.min_amount:.2f}–${job.max_amount:.2f} {'/'.join(job.currencies)} "
+        f"  {format_usd(job.min_amount)}–{format_usd(job.max_amount)} {'/'.join(job.currencies)} "
         f"every {interval}"
     )
 
@@ -243,7 +255,7 @@ async def randomdrops(
     interaction: nextcord.Interaction,
 
     min_amount: float = nextcord.SlashOption(
-        description="Minimum USD per drop, e.g. 0.10"
+        description="Minimum USD per drop, e.g. 0.0025 (up to 4 decimals, min 0.001)"
     ),
 
     max_amount: float = nextcord.SlashOption(
@@ -326,9 +338,12 @@ async def randomdrops(
             ephemeral=True
         )
 
-    if min_amount <= 0 or max_amount < min_amount:
+    min_amount = round(min_amount, AMOUNT_DECIMALS)
+    max_amount = round(max_amount, AMOUNT_DECIMALS)
+
+    if min_amount < MIN_DROP_USD or max_amount < min_amount:
         return await interaction.send(
-            "Amounts must be positive and max ≥ min.",
+            f"Amounts must be at least {format_usd(MIN_DROP_USD)} and max ≥ min.",
             ephemeral=True
         )
 
@@ -443,9 +458,10 @@ async def dropnow(
             ephemeral=True
         )
 
-    if amount <= 0:
+    amount = round(amount, AMOUNT_DECIMALS)
+    if amount < MIN_DROP_USD:
         return await interaction.send(
-            "Amount must be positive.",
+            f"Amount must be at least {format_usd(MIN_DROP_USD)}.",
             ephemeral=True
         )
 
