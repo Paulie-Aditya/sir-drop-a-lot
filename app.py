@@ -98,8 +98,28 @@ class Job:
     created_by: Optional[int] = None
 
 
-jobs: dict[int, Job] = {}
-job_counter = 1
+# guild_id -> {job_id -> Job}. Each server has its own jobs and its own
+# job numbering, so nothing about one server's jobs leaks into another.
+jobs: dict[int, dict[int, Job]] = {}
+job_counters: dict[int, int] = {}
+
+
+def guild_jobs(guild_id: int) -> dict[int, Job]:
+    return jobs.setdefault(guild_id, {})
+
+
+def next_job_id(guild_id: int) -> int:
+    job_counters[guild_id] = job_counters.get(guild_id, 0) + 1
+    return job_counters[guild_id]
+
+
+def remove_job(guild_id: int, job_id: int):
+    gjobs = jobs.get(guild_id)
+    if gjobs is None:
+        return
+    gjobs.pop(job_id, None)
+    if not gjobs:
+        jobs.pop(guild_id, None)
 
 # =========================
 # Helpers
@@ -195,37 +215,41 @@ async def scheduler():
 
     remove_ids = []
 
-    for job_id, job in list(jobs.items()):
+    for guild_id, gjobs in list(jobs.items()):
 
-        if job.paused or now < job.next_run:
-            continue
+        guild = bot.get_guild(guild_id)
 
-        guild = bot.get_guild(job.guild_id)
-
+        # Temporarily unavailable (outage) -- skip; on_guild_remove handles
+        # the bot actually leaving.
         if guild is None:
-            remove_ids.append(job_id)
             continue
 
-        channel = guild.get_channel(job.channel_id)
+        for job_id, job in list(gjobs.items()):
 
-        if channel is None:
-            remove_ids.append(job_id)
-            continue
+            if job.paused or now < job.next_run:
+                continue
 
-        try:
+            channel = guild.get_channel(job.channel_id)
 
-            await execute_job(channel, job)
+            # Only ever post in a channel that belongs to the job's own server.
+            if channel is None or channel.guild.id != guild_id:
+                remove_ids.append((guild_id, job_id))
+                continue
 
-        except Exception as e:
-            print(f"Scheduler error (job #{job_id}): {e}")
+            try:
 
-        if job.remaining_runs is not None and job.remaining_runs <= 0:
-            remove_ids.append(job_id)
-        else:
-            job.next_run = now + roll_interval(job)
+                await execute_job(channel, job)
 
-    for job_id in remove_ids:
-        jobs.pop(job_id, None)
+            except Exception as e:
+                print(f"Scheduler error (guild {guild_id}, job #{job_id}): {e}")
+
+            if job.remaining_runs is not None and job.remaining_runs <= 0:
+                remove_ids.append((guild_id, job_id))
+            else:
+                job.next_run = now + roll_interval(job)
+
+    for guild_id, job_id in remove_ids:
+        remove_job(guild_id, job_id)
 
 
 # =========================
@@ -244,11 +268,18 @@ async def on_ready():
         scheduler.start()
 
 
+@bot.event
+async def on_guild_remove(guild):
+    jobs.pop(guild.id, None)
+    job_counters.pop(guild.id, None)
+
+
 # =========================
 # Slash Commands
 # =========================
 
 @bot.slash_command(
+    dm_permission=False,
     description="Start random CoinDrop games in a channel"
 )
 async def randomdrops(
@@ -316,8 +347,6 @@ async def randomdrops(
     ),
 ):
 
-    global job_counter
-
     if not has_manage_guild(interaction):
         return await interaction.send(
             "Manage Server permission required.",
@@ -374,8 +403,14 @@ async def randomdrops(
 
     target = channel or interaction.channel
 
+    if target.guild.id != interaction.guild.id:
+        return await interaction.send(
+            "Channel must be in this server.",
+            ephemeral=True
+        )
+
     job = Job(
-        id=job_counter,
+        id=next_job_id(interaction.guild.id),
         guild_id=interaction.guild.id,
         channel_id=target.id,
         games=game_list,
@@ -392,8 +427,7 @@ async def randomdrops(
     )
     job.next_run = time.time() + roll_interval(job)
 
-    job_counter += 1
-    jobs[job.id] = job
+    guild_jobs(job.guild_id)[job.id] = job
 
     # Respond first so the CoinDrop command doesn't land before the ack.
     await interaction.send(
@@ -411,10 +445,11 @@ async def randomdrops(
             )
 
         if job.remaining_runs is not None and job.remaining_runs <= 0:
-            jobs.pop(job.id, None)
+            remove_job(job.guild_id, job.id)
 
 
 @bot.slash_command(
+    dm_permission=False,
     description="Fire one random CoinDrop game right now"
 )
 async def dropnow(
@@ -488,34 +523,29 @@ async def dropnow(
 
 
 @bot.slash_command(
+    dm_permission=False,
     description="View active random drop jobs"
 )
 async def jobs_list(interaction: nextcord.Interaction):
 
-    guild_jobs = [
-        job
-        for job in jobs.values()
-        if job.guild_id == interaction.guild.id
-    ]
+    gjobs = list(jobs.get(interaction.guild.id, {}).values())
 
-    if not guild_jobs:
+    if not gjobs:
         return await interaction.send(
             "No active jobs."
         )
 
     await interaction.send(
-        "\n\n".join(describe_job(job) for job in guild_jobs)
+        "\n\n".join(describe_job(job) for job in gjobs)
     )
 
 
 def get_guild_job(interaction: nextcord.Interaction, job_id: int) -> Optional[Job]:
-    job = jobs.get(job_id)
-    if job is None or job.guild_id != interaction.guild.id:
-        return None
-    return job
+    return jobs.get(interaction.guild.id, {}).get(job_id)
 
 
 @bot.slash_command(
+    dm_permission=False,
     description="Delete a job"
 )
 async def delete_job(
@@ -535,7 +565,7 @@ async def delete_job(
             ephemeral=True
         )
 
-    del jobs[job_id]
+    remove_job(interaction.guild.id, job_id)
 
     await interaction.send(
         f"Deleted job #{job_id}"
@@ -543,6 +573,7 @@ async def delete_job(
 
 
 @bot.slash_command(
+    dm_permission=False,
     description="Pause or resume a job"
 )
 async def pause_job(
@@ -573,6 +604,7 @@ async def pause_job(
 
 
 @bot.slash_command(
+    dm_permission=False,
     description="Get the bot's CoinDrop balance"
 )
 async def balance(

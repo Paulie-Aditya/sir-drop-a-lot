@@ -1,6 +1,6 @@
 # Dropalot
 
-A Discord bot that runs random CoinDrop games in a channel at random intervals. It works like AutoDrop: it posts `@CoinDrop <game> ...` commands, and CoinDrop runs the game, paying for it from **this bot's own CoinDrop balance**. All state is in memory, so jobs are lost when the bot restarts.
+A Discord bot that runs random CoinDrop games in a channel at random intervals. It works like AutoDrop: it posts `@CoinDrop <game> ...` commands, and CoinDrop runs the game, paying for it from **this bot's own CoinDrop balance**. All state is in memory, so jobs are lost when the bot restarts. Jobs belong to the server they were created in: each server has its own job numbers, only sees its own jobs, and a job only ever posts in its own server. Commands don't work in DMs.
 
 Games it can pick from: `airdrop`, `raffle`, `mathtip`, `triviadrop`, `coinflip`, `slowdrop`, `quickdrop`.
 
