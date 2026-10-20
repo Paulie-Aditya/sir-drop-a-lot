@@ -24,6 +24,7 @@ Before it will work:
 | Command | Who | What it does |
 |---|---|---|
 | `/randomdrops` | Manage Server | Starts a job that picks a random game, amount (USD, up to 4 decimals, min $0.001), currency, and delay (between min and max minutes) for each drop |
+| `/budgetdrops` | Manage Server | Runs for *x* days, one drop every *y* minutes, spending *z* USD in total. Same random games and currencies as `/randomdrops` |
 | `/dropnow` | Manage Server | Runs one game now (random, or a game you choose) |
 | `/jobs_list` | anyone | Lists this server's jobs |
 | `/pause_job <id>` | Manage Server | Pauses or resumes a job |
@@ -31,6 +32,8 @@ Before it will work:
 | `/balance [coin]` | Administrator | Asks CoinDrop for the bot's balance |
 
 `/randomdrops` options: `games` (`all` or a list such as `airdrop,mathtip,coinflip`), `currency` (one currency, or a list to pick from at random), `runs` (0 means run until stopped), `duration`, `winners`, `role`, `channel`, `start_now`.
+
+`/budgetdrops` options: `days`, `interval_minutes`, `total`, plus `variety` (how much each drop may differ from an even share, 0–100%, default 50) and the same `games`, `currency`, `duration`, `winners`, `role`, `channel`, `start_now` as `/randomdrops`. The number of drops is `days × 1440 ÷ interval_minutes`. Amounts are random but the total is always spent exactly, the last drop takes whatever is left, and no drop goes below CoinDrop's $0.001 minimum. Example: `days:7 interval_minutes:60 total:5` gives 168 drops averaging about $0.03 each.
 
 CoinDrop's own limits are built in: slowdrop always runs for 5s, quickdrop has no duration, `winners` only applies to airdrop/raffle/mathtip/triviadrop, and a raffle with no `winners` set defaults to `for 1`.
 

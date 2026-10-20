@@ -2,6 +2,7 @@ import nextcord
 from nextcord.ext import commands, tasks
 from dataclasses import dataclass
 from typing import Optional
+import math
 import random
 import time
 import os
@@ -91,6 +92,12 @@ class Job:
     winners: Optional[int] = None
     role_id: Optional[int] = None
 
+    # Budget jobs (/budgetdrops): a fixed USD total spread over the job's runs.
+    total_budget: Optional[float] = None
+    budget_remaining: Optional[float] = None
+    # How far each drop may stray from the even share, 0.5 = ±50%.
+    variety: float = 0
+
     paused: bool = False
     next_run: float = 0
     runs_done: int = 0
@@ -130,7 +137,33 @@ def roll_interval(job: Job) -> int:
 
 
 def roll_amount(job: Job) -> float:
+    if job.budget_remaining is not None:
+        return roll_budget_amount(job)
     return round(random.uniform(job.min_amount, job.max_amount), AMOUNT_DECIMALS)
+
+
+def floor_usd(amount: float) -> float:
+    factor = 10 ** AMOUNT_DECIMALS
+    # Small epsilon so float noise (0.3 -> 0.29999...) doesn't lose a unit.
+    return math.floor(amount * factor + 1e-6) / factor
+
+
+def roll_budget_amount(job: Job) -> float:
+    remaining = job.budget_remaining
+    runs_left = job.remaining_runs
+
+    # Last drop takes whatever is left, so the budget is spent exactly.
+    if runs_left <= 1:
+        return round(remaining, AMOUNT_DECIMALS)
+
+    share = remaining / runs_left
+    # Always leave enough for every later drop to meet CoinDrop's minimum.
+    ceiling = remaining - MIN_DROP_USD * (runs_left - 1)
+    low = max(MIN_DROP_USD, share * (1 - job.variety))
+    high = min(ceiling, share * (1 + job.variety))
+
+    amount = random.uniform(low, high) if high > low else share
+    return max(MIN_DROP_USD, min(floor_usd(amount), floor_usd(ceiling)))
 
 
 def format_usd(amount: float) -> str:
@@ -169,6 +202,8 @@ async def execute_job(channel, job: Job, game: Optional[str] = None):
 
     job.last_command = msg
     job.runs_done += 1
+    if job.budget_remaining is not None:
+        job.budget_remaining = round(job.budget_remaining - amount, AMOUNT_DECIMALS)
     if job.remaining_runs is not None:
         job.remaining_runs -= 1
 
@@ -181,7 +216,10 @@ def format_seconds(seconds: float) -> str:
     if minutes < 60:
         return f"{minutes}m {seconds}s" if seconds else f"{minutes}m"
     hours, minutes = divmod(minutes, 60)
-    return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    if hours < 24:
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours}h" if hours else f"{days}d"
 
 
 def describe_job(job: Job) -> str:
@@ -192,9 +230,21 @@ def describe_job(job: Job) -> str:
         if job.min_interval_seconds == job.max_interval_seconds
         else f"{format_seconds(job.min_interval_seconds)}–{format_seconds(job.max_interval_seconds)}"
     )
-    return (
+    header = (
         f"**#{job.id}** in <#{job.channel_id}> | {status} | {runs} runs left\n"
         f"  games: {', '.join(job.games)}\n"
+    )
+
+    if job.budget_remaining is not None:
+        ends = job.next_run + max(0, job.remaining_runs - 1) * job.max_interval_seconds
+        share = job.budget_remaining / job.remaining_runs if job.remaining_runs else 0
+        return header + (
+            f"  budget: {format_usd(job.budget_remaining)} of {format_usd(job.total_budget)} left "
+            f"({'/'.join(job.currencies)}), ~{format_usd(share)} per drop every {interval}\n"
+            f"  ends in ~{format_seconds(ends - time.time())}"
+        )
+
+    return header + (
         f"  {format_usd(job.min_amount)}–{format_usd(job.max_amount)} {'/'.join(job.currencies)} "
         f"every {interval}"
     )
@@ -202,6 +252,60 @@ def describe_job(job: Job) -> str:
 
 def has_manage_guild(interaction: nextcord.Interaction) -> bool:
     return interaction.user.guild_permissions.manage_guild
+
+
+async def check_drop_options(interaction, games, currency, duration, winners, channel):
+    """Validate the options /randomdrops and /budgetdrops share.
+
+    Sends the error and returns None if something is wrong, otherwise
+    (game_list, currency_list, target_channel)."""
+
+    async def fail(msg):
+        await interaction.send(msg, ephemeral=True)
+
+    game_list = parse_list(games, list(GAMES))
+    if not game_list:
+        return await fail(f"No valid games. Pick from: {', '.join(GAMES)} (or `all`).")
+
+    currency_list = [c.upper() for c in parse_list(currency)]
+    if not currency_list:
+        return await fail("At least one currency required.")
+
+    duration_seconds = parse_duration(duration)
+    if duration_seconds is None or duration_seconds < MIN_DURATION_SECONDS:
+        return await fail("Duration must look like `30s`, `1m` or `1h`, and be at least 5s.")
+
+    if winners is not None and winners < 1:
+        return await fail("Winners must be at least 1.")
+
+    target = channel or interaction.channel
+
+    if target.guild.id != interaction.guild.id:
+        return await fail("Channel must be in this server.")
+
+    return game_list, currency_list, target
+
+
+async def start_job(interaction, job: Job, target, start_now: bool, label: str):
+    guild_jobs(job.guild_id)[job.id] = job
+
+    # Respond first so the CoinDrop command doesn't land before the ack.
+    await interaction.send(
+        f"Created {label} job #{job.id}\n{describe_job(job)}"
+    )
+
+    if start_now:
+        try:
+            await execute_job(target, job)
+        except Exception as e:
+            print(e)
+            await interaction.followup.send(
+                f"Couldn't post in {target.mention}: {e}",
+                ephemeral=True
+            )
+
+        if job.remaining_runs is not None and job.remaining_runs <= 0:
+            remove_job(job.guild_id, job.id)
 
 
 # =========================
@@ -353,19 +457,10 @@ async def randomdrops(
             ephemeral=True
         )
 
-    game_list = parse_list(games, list(GAMES))
-    if not game_list:
-        return await interaction.send(
-            f"No valid games. Pick from: {', '.join(GAMES)} (or `all`).",
-            ephemeral=True
-        )
-
-    currency_list = [c.upper() for c in parse_list(currency)]
-    if not currency_list:
-        return await interaction.send(
-            "At least one currency required.",
-            ephemeral=True
-        )
+    checked = await check_drop_options(interaction, games, currency, duration, winners, channel)
+    if checked is None:
+        return
+    game_list, currency_list, target = checked
 
     min_amount = round(min_amount, AMOUNT_DECIMALS)
     max_amount = round(max_amount, AMOUNT_DECIMALS)
@@ -382,30 +477,9 @@ async def randomdrops(
             ephemeral=True
         )
 
-    duration_seconds = parse_duration(duration)
-    if duration_seconds is None or duration_seconds < MIN_DURATION_SECONDS:
-        return await interaction.send(
-            "Duration must look like `30s`, `1m` or `1h`, and be at least 5s.",
-            ephemeral=True
-        )
-
-    if winners is not None and winners < 1:
-        return await interaction.send(
-            "Winners must be at least 1.",
-            ephemeral=True
-        )
-
     if runs < 0:
         return await interaction.send(
             "Runs can't be negative.",
-            ephemeral=True
-        )
-
-    target = channel or interaction.channel
-
-    if target.guild.id != interaction.guild.id:
-        return await interaction.send(
-            "Channel must be in this server.",
             ephemeral=True
         )
 
@@ -427,25 +501,141 @@ async def randomdrops(
     )
     job.next_run = time.time() + roll_interval(job)
 
-    guild_jobs(job.guild_id)[job.id] = job
+    await start_job(interaction, job, target, start_now, "random drop")
 
-    # Respond first so the CoinDrop command doesn't land before the ack.
-    await interaction.send(
-        f"Created random drop job #{job.id}\n{describe_job(job)}"
+
+@bot.slash_command(
+    dm_permission=False,
+    description="Spend a fixed budget on random CoinDrop games over a number of days"
+)
+async def budgetdrops(
+    interaction: nextcord.Interaction,
+
+    days: float = nextcord.SlashOption(
+        description="How many days to run for, e.g. 7 or 0.5"
+    ),
+
+    interval_minutes: int = nextcord.SlashOption(
+        description="Minutes between drops"
+    ),
+
+    total: float = nextcord.SlashOption(
+        description="Total USD to spend across every drop, e.g. 5"
+    ),
+
+    currency: str = nextcord.SlashOption(
+        required=False,
+        default="BNB",
+        description="Currency, or several to pick from at random, e.g. BNB,SOL,BAN"
+    ),
+
+    games: str = nextcord.SlashOption(
+        required=False,
+        default="all",
+        description=f"all, or a list from: {', '.join(GAMES)}"
+    ),
+
+    variety: int = nextcord.SlashOption(
+        required=False,
+        default=50,
+        description="How much each drop may vary from an even share, in % (0 = all equal)"
+    ),
+
+    duration: str = nextcord.SlashOption(
+        required=False,
+        default="1m",
+        description="How long each game stays open, e.g. 30s, 1m, 5m (slowdrop always uses 5s)"
+    ),
+
+    winners: int = nextcord.SlashOption(
+        required=False,
+        description="Cap winners for airdrop/raffle/mathtip/triviadrop"
+    ),
+
+    role: nextcord.Role = nextcord.SlashOption(
+        required=False,
+        description="Only members with this role can join"
+    ),
+
+    channel: nextcord.TextChannel = nextcord.SlashOption(
+        required=False,
+        description="Channel to drop in (defaults to this one)"
+    ),
+
+    start_now: bool = nextcord.SlashOption(
+        required=False,
+        default=True,
+        description="Fire the first drop immediately"
+    ),
+):
+
+    if not has_manage_guild(interaction):
+        return await interaction.send(
+            "Manage Server permission required.",
+            ephemeral=True
+        )
+
+    checked = await check_drop_options(interaction, games, currency, duration, winners, channel)
+    if checked is None:
+        return
+    game_list, currency_list, target = checked
+
+    if days <= 0:
+        return await interaction.send(
+            "Days must be more than 0.",
+            ephemeral=True
+        )
+
+    if interval_minutes < 1:
+        return await interaction.send(
+            "Interval must be at least 1 minute.",
+            ephemeral=True
+        )
+
+    if not 0 <= variety <= 100:
+        return await interaction.send(
+            "Variety must be between 0 and 100.",
+            ephemeral=True
+        )
+
+    runs = int(days * 24 * 60 // interval_minutes)
+    if runs < 1:
+        return await interaction.send(
+            f"{days:g} days is shorter than one {interval_minutes}-minute interval.",
+            ephemeral=True
+        )
+
+    total = round(total, AMOUNT_DECIMALS)
+    if total < MIN_DROP_USD * runs:
+        return await interaction.send(
+            f"{format_usd(total)} over {runs} drops is under CoinDrop's "
+            f"{format_usd(MIN_DROP_USD)} minimum per drop. Raise the total to at least "
+            f"{format_usd(MIN_DROP_USD * runs)}, or use a longer interval.",
+            ephemeral=True
+        )
+
+    job = Job(
+        id=next_job_id(interaction.guild.id),
+        guild_id=interaction.guild.id,
+        channel_id=target.id,
+        games=game_list,
+        currencies=currency_list,
+        min_amount=MIN_DROP_USD,
+        max_amount=total,
+        min_interval_seconds=interval_minutes * 60,
+        max_interval_seconds=interval_minutes * 60,
+        remaining_runs=runs,
+        duration=duration.strip().lower(),
+        winners=winners,
+        role_id=role.id if role else None,
+        created_by=interaction.user.id,
+        total_budget=total,
+        budget_remaining=total,
+        variety=variety / 100,
     )
+    job.next_run = time.time() + roll_interval(job)
 
-    if start_now:
-        try:
-            await execute_job(target, job)
-        except Exception as e:
-            print(e)
-            await interaction.followup.send(
-                f"Couldn't post in {target.mention}: {e}",
-                ephemeral=True
-            )
-
-        if job.remaining_runs is not None and job.remaining_runs <= 0:
-            remove_job(job.guild_id, job.id)
+    await start_job(interaction, job, target, start_now, "budget drop")
 
 
 @bot.slash_command(
