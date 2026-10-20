@@ -2,6 +2,7 @@ import nextcord
 from nextcord.ext import commands, tasks
 from dataclasses import dataclass
 from typing import Optional
+import functools
 import math
 import random
 import time
@@ -250,6 +251,20 @@ def describe_job(job: Job) -> str:
     )
 
 
+def guild_only(func):
+    # Every command is per-server. Checked at runtime rather than with
+    # slash_command(dm_permission=False), which not every nextcord version has.
+    @functools.wraps(func)
+    async def wrapper(interaction: nextcord.Interaction, *args, **kwargs):
+        if interaction.guild is None:
+            return await interaction.send(
+                "This command only works in a server.",
+                ephemeral=True
+            )
+        return await func(interaction, *args, **kwargs)
+    return wrapper
+
+
 def has_manage_guild(interaction: nextcord.Interaction) -> bool:
     return interaction.user.guild_permissions.manage_guild
 
@@ -383,9 +398,9 @@ async def on_guild_remove(guild):
 # =========================
 
 @bot.slash_command(
-    dm_permission=False,
     description="Start random CoinDrop games in a channel"
 )
+@guild_only
 async def randomdrops(
     interaction: nextcord.Interaction,
 
@@ -505,9 +520,9 @@ async def randomdrops(
 
 
 @bot.slash_command(
-    dm_permission=False,
     description="Spend a fixed budget on random CoinDrop games over a number of days"
 )
+@guild_only
 async def budgetdrops(
     interaction: nextcord.Interaction,
 
@@ -639,9 +654,9 @@ async def budgetdrops(
 
 
 @bot.slash_command(
-    dm_permission=False,
     description="Fire one random CoinDrop game right now"
 )
+@guild_only
 async def dropnow(
     interaction: nextcord.Interaction,
 
@@ -713,9 +728,9 @@ async def dropnow(
 
 
 @bot.slash_command(
-    dm_permission=False,
     description="View active random drop jobs"
 )
+@guild_only
 async def jobs_list(interaction: nextcord.Interaction):
 
     gjobs = list(jobs.get(interaction.guild.id, {}).values())
@@ -735,9 +750,9 @@ def get_guild_job(interaction: nextcord.Interaction, job_id: int) -> Optional[Jo
 
 
 @bot.slash_command(
-    dm_permission=False,
     description="Delete a job"
 )
+@guild_only
 async def delete_job(
     interaction: nextcord.Interaction,
     job_id: int
@@ -763,9 +778,9 @@ async def delete_job(
 
 
 @bot.slash_command(
-    dm_permission=False,
     description="Pause or resume a job"
 )
+@guild_only
 async def pause_job(
     interaction: nextcord.Interaction,
     job_id: int
@@ -794,9 +809,9 @@ async def pause_job(
 
 
 @bot.slash_command(
-    dm_permission=False,
     description="Get the bot's CoinDrop balance"
 )
+@guild_only
 async def balance(
     interaction: nextcord.Interaction,
 
