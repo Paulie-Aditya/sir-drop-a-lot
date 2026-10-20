@@ -21,6 +21,8 @@ Before it will work:
 
 ## Commands
 
+Slash commands are registered to server `1422459919482884156` so changes show up instantly. Set `GUILD_IDS` in `.env` to a comma-separated list to use other servers, or to an empty value (`GUILD_IDS=`) to register globally. Global commands can take a while to appear.
+
 Every command can only be run by Discord user `464445762986704918` (`OWNER_ID` in `app.py`). Anyone else gets a private "not allowed" reply.
 
 | Command | What it does |

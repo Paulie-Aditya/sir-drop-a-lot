@@ -20,7 +20,15 @@ OWNER_ID = 464445762986704918
 intents = nextcord.Intents.default()
 intents.guilds = True
 
-bot = commands.Bot(intents=intents)
+# Slash commands are registered per server so changes show up instantly;
+# global commands can take a long time to reach clients. Set GUILD_IDS to
+# a comma-separated list to use other servers, or to an empty value to
+# register globally instead.
+GUILD_IDS = [
+    int(g) for g in os.getenv("GUILD_IDS", "1422459919482884156").split(",") if g.strip()
+]
+
+bot = commands.Bot(intents=intents, default_guild_ids=GUILD_IDS or None)
 
 # Role mentions are only there for CoinDrop's parser -- never ping the role.
 ALLOWED_MENTIONS = nextcord.AllowedMentions(everyone=False, roles=False, users=True)
