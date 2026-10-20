@@ -21,15 +21,17 @@ Before it will work:
 
 ## Commands
 
-| Command | Who | What it does |
-|---|---|---|
-| `/randomdrops` | Manage Server | Starts a job that picks a random game, amount (USD, up to 4 decimals, min $0.001), currency, and delay (between min and max minutes) for each drop |
-| `/budgetdrops` | Manage Server | Runs for *x* days, one drop every *y* minutes, spending *z* USD in total. Same random games and currencies as `/randomdrops` |
-| `/dropnow` | Manage Server | Runs one game now (random, or a game you choose) |
-| `/jobs_list` | anyone | Lists this server's jobs |
-| `/pause_job <id>` | Manage Server | Pauses or resumes a job |
-| `/delete_job <id>` | Manage Server | Stops a job |
-| `/balance [coin]` | Administrator | Asks CoinDrop for the bot's balance |
+Every command can only be run by Discord user `464445762986704918` (`OWNER_ID` in `app.py`). Anyone else gets a private "not allowed" reply.
+
+| Command | What it does |
+|---|---|
+| `/randomdrops` | Starts a job that picks a random game, amount (USD, up to 4 decimals, min $0.001), currency, and delay (between min and max minutes) for each drop |
+| `/budgetdrops` | Runs for *x* days, one drop every *y* minutes, spending *z* USD in total. Same random games and currencies as `/randomdrops` |
+| `/dropnow` | Runs one game now (random, or a game you choose) |
+| `/jobs_list` | Lists this server's jobs |
+| `/pause_job <id>` | Pauses or resumes a job |
+| `/delete_job <id>` | Stops a job |
+| `/balance [coin]` | Asks CoinDrop for the bot's balance |
 
 `/randomdrops` options: `games` (`all` or a list such as `airdrop,mathtip,coinflip`), `currency` (one currency, or a list to pick from at random), `runs` (0 means run until stopped), `duration`, `winners`, `role`, `channel`, `start_now`.
 

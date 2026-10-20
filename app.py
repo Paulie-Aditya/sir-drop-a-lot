@@ -14,6 +14,9 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 COINDROP_ID = int(os.getenv("COINDROP_ID", "1422469144099426355"))
 COINDROP = f"<@{COINDROP_ID}>"
 
+# The only Discord user allowed to run any of this bot's commands.
+OWNER_ID = 464445762986704918
+
 intents = nextcord.Intents.default()
 intents.guilds = True
 
@@ -251,11 +254,17 @@ def describe_job(job: Job) -> str:
     )
 
 
-def guild_only(func):
-    # Every command is per-server. Checked at runtime rather than with
-    # slash_command(dm_permission=False), which not every nextcord version has.
+def owner_only(func):
+    # Every command is owner-only and per-server. The server check runs here
+    # rather than via slash_command(dm_permission=False), which not every
+    # nextcord version has.
     @functools.wraps(func)
     async def wrapper(interaction: nextcord.Interaction, *args, **kwargs):
+        if interaction.user.id != OWNER_ID:
+            return await interaction.send(
+                "You're not allowed to use this bot.",
+                ephemeral=True
+            )
         if interaction.guild is None:
             return await interaction.send(
                 "This command only works in a server.",
@@ -263,10 +272,6 @@ def guild_only(func):
             )
         return await func(interaction, *args, **kwargs)
     return wrapper
-
-
-def has_manage_guild(interaction: nextcord.Interaction) -> bool:
-    return interaction.user.guild_permissions.manage_guild
 
 
 async def check_drop_options(interaction, games, currency, duration, winners, channel):
@@ -400,7 +405,7 @@ async def on_guild_remove(guild):
 @bot.slash_command(
     description="Start random CoinDrop games in a channel"
 )
-@guild_only
+@owner_only
 async def randomdrops(
     interaction: nextcord.Interaction,
 
@@ -466,12 +471,6 @@ async def randomdrops(
     ),
 ):
 
-    if not has_manage_guild(interaction):
-        return await interaction.send(
-            "Manage Server permission required.",
-            ephemeral=True
-        )
-
     checked = await check_drop_options(interaction, games, currency, duration, winners, channel)
     if checked is None:
         return
@@ -522,7 +521,7 @@ async def randomdrops(
 @bot.slash_command(
     description="Spend a fixed budget on random CoinDrop games over a number of days"
 )
-@guild_only
+@owner_only
 async def budgetdrops(
     interaction: nextcord.Interaction,
 
@@ -583,12 +582,6 @@ async def budgetdrops(
         description="Fire the first drop immediately"
     ),
 ):
-
-    if not has_manage_guild(interaction):
-        return await interaction.send(
-            "Manage Server permission required.",
-            ephemeral=True
-        )
 
     checked = await check_drop_options(interaction, games, currency, duration, winners, channel)
     if checked is None:
@@ -656,7 +649,7 @@ async def budgetdrops(
 @bot.slash_command(
     description="Fire one random CoinDrop game right now"
 )
-@guild_only
+@owner_only
 async def dropnow(
     interaction: nextcord.Interaction,
 
@@ -684,12 +677,6 @@ async def dropnow(
         required=False
     ),
 ):
-
-    if not has_manage_guild(interaction):
-        return await interaction.send(
-            "Manage Server permission required.",
-            ephemeral=True
-        )
 
     duration_seconds = parse_duration(duration)
     if duration_seconds is None or duration_seconds < MIN_DURATION_SECONDS:
@@ -730,7 +717,7 @@ async def dropnow(
 @bot.slash_command(
     description="View active random drop jobs"
 )
-@guild_only
+@owner_only
 async def jobs_list(interaction: nextcord.Interaction):
 
     gjobs = list(jobs.get(interaction.guild.id, {}).values())
@@ -752,17 +739,11 @@ def get_guild_job(interaction: nextcord.Interaction, job_id: int) -> Optional[Jo
 @bot.slash_command(
     description="Delete a job"
 )
-@guild_only
+@owner_only
 async def delete_job(
     interaction: nextcord.Interaction,
     job_id: int
 ):
-
-    if not has_manage_guild(interaction):
-        return await interaction.send(
-            "Manage Server permission required.",
-            ephemeral=True
-        )
 
     if get_guild_job(interaction, job_id) is None:
         return await interaction.send(
@@ -780,17 +761,11 @@ async def delete_job(
 @bot.slash_command(
     description="Pause or resume a job"
 )
-@guild_only
+@owner_only
 async def pause_job(
     interaction: nextcord.Interaction,
     job_id: int
 ):
-
-    if not has_manage_guild(interaction):
-        return await interaction.send(
-            "Manage Server permission required.",
-            ephemeral=True
-        )
 
     job = get_guild_job(interaction, job_id)
     if job is None:
@@ -811,7 +786,7 @@ async def pause_job(
 @bot.slash_command(
     description="Get the bot's CoinDrop balance"
 )
-@guild_only
+@owner_only
 async def balance(
     interaction: nextcord.Interaction,
 
@@ -819,12 +794,6 @@ async def balance(
         required=False
     ),
 ):
-
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.send(
-            "Administrator permission required.",
-            ephemeral=True
-        )
 
     await interaction.send("Asking CoinDrop…", ephemeral=True)
 
