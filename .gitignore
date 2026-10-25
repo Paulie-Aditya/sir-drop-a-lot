@@ -22,3 +22,9 @@ env/
 
 # Logs
 *.log
+
+# Job database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

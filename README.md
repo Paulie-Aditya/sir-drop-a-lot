@@ -1,6 +1,6 @@
 # Dropalot
 
-A Discord bot that runs random CoinDrop games in a channel at random intervals. It works like AutoDrop: it posts `@CoinDrop <game> ...` commands, and CoinDrop runs the game, paying for it from **this bot's own CoinDrop balance**. All state is in memory, so jobs are lost when the bot restarts. Jobs belong to the server they were created in: each server has its own job numbers, only sees its own jobs, and a job only ever posts in its own server. Commands don't work in DMs.
+A Discord bot that runs random CoinDrop games in a channel at random intervals. It works like AutoDrop: it posts `@CoinDrop <game> ...` commands, and CoinDrop runs the game, paying for it from **this bot's own CoinDrop balance**. Jobs are saved to a local SQLite file (`dropalot.db`, next to `app.py`), so they survive restarts and crashes. If a job came due while the bot was down, it fires once on startup and then goes back to its normal schedule. Jobs belong to the server they were created in: each server has its own job numbers, only sees its own jobs, and a job only ever posts in its own server. Commands don't work in DMs.
 
 Games it can pick from: `airdrop`, `raffle`, `mathtip`, `triviadrop`, `coinflip`, `slowdrop`, `quickdrop`.
 
@@ -53,4 +53,4 @@ journalctl -u dropalot -f              # watch logs
 ```
 
 To update: `git pull && venv/bin/pip install -r requirements.txt && sudo systemctl restart dropalot`.
-Jobs live in memory, so a restart clears them.
+Jobs are kept in `dropalot.db`, so restarts and updates don't lose them. That file is git-ignored. Back it up (for example `cp dropalot.db ~/dropalot.db.bak`) if you're going to replace the instance. Set `DB_PATH` in `.env` to store it somewhere else.

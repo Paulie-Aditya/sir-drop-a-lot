@@ -1,18 +1,22 @@
 import nextcord
 from nextcord.ext import commands, tasks
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict, fields
 from typing import Optional
 import functools
+import json
 import math
 import random
 import time
 import os
+import sqlite3
 from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 COINDROP_ID = int(os.getenv("COINDROP_ID", "1422469144099426355"))
 COINDROP = f"<@{COINDROP_ID}>"
+# SQLite file the jobs are saved to, so they survive restarts.
+DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "dropalot.db"))
 
 # The only Discord user allowed to run any of this bot's commands.
 OWNER_ID = 464445762986704918
@@ -119,8 +123,47 @@ class Job:
 
 # guild_id -> {job_id -> Job}. Each server has its own jobs and its own
 # job numbering, so nothing about one server's jobs leaks into another.
+# Every change is also written to SQLite and loaded back on startup.
 jobs: dict[int, dict[int, Job]] = {}
 job_counters: dict[int, int] = {}
+
+db = sqlite3.connect(DB_PATH, isolation_level=None)
+db.execute("""
+    CREATE TABLE IF NOT EXISTS jobs (
+        guild_id INTEGER NOT NULL,
+        job_id   INTEGER NOT NULL,
+        data     TEXT NOT NULL,
+        PRIMARY KEY (guild_id, job_id)
+    )
+""")
+db.execute("""
+    CREATE TABLE IF NOT EXISTS job_counters (
+        guild_id INTEGER PRIMARY KEY,
+        last_id  INTEGER NOT NULL
+    )
+""")
+
+
+def save_job(job: Job):
+    db.execute(
+        "INSERT OR REPLACE INTO jobs (guild_id, job_id, data) VALUES (?, ?, ?)",
+        (job.guild_id, job.id, json.dumps(asdict(job)))
+    )
+
+
+def load_jobs():
+    known = {f.name for f in fields(Job)}
+
+    for guild_id, last_id in db.execute("SELECT guild_id, last_id FROM job_counters"):
+        job_counters[guild_id] = last_id
+
+    for (data,) in db.execute("SELECT data FROM jobs"):
+        # Ignore fields from older/newer versions of Job.
+        job = Job(**{k: v for k, v in json.loads(data).items() if k in known})
+        guild_jobs(job.guild_id)[job.id] = job
+
+    count = sum(len(g) for g in jobs.values())
+    print(f"Loaded {count} job(s) from {DB_PATH}")
 
 
 def guild_jobs(guild_id: int) -> dict[int, Job]:
@@ -129,16 +172,28 @@ def guild_jobs(guild_id: int) -> dict[int, Job]:
 
 def next_job_id(guild_id: int) -> int:
     job_counters[guild_id] = job_counters.get(guild_id, 0) + 1
+    db.execute(
+        "INSERT OR REPLACE INTO job_counters (guild_id, last_id) VALUES (?, ?)",
+        (guild_id, job_counters[guild_id])
+    )
     return job_counters[guild_id]
 
 
 def remove_job(guild_id: int, job_id: int):
+    db.execute("DELETE FROM jobs WHERE guild_id = ? AND job_id = ?", (guild_id, job_id))
     gjobs = jobs.get(guild_id)
     if gjobs is None:
         return
     gjobs.pop(job_id, None)
     if not gjobs:
         jobs.pop(guild_id, None)
+
+
+def remove_guild(guild_id: int):
+    db.execute("DELETE FROM jobs WHERE guild_id = ?", (guild_id,))
+    db.execute("DELETE FROM job_counters WHERE guild_id = ?", (guild_id,))
+    jobs.pop(guild_id, None)
+    job_counters.pop(guild_id, None)
 
 # =========================
 # Helpers
@@ -316,6 +371,7 @@ async def check_drop_options(interaction, games, currency, duration, winners, ch
 
 async def start_job(interaction, job: Job, target, start_now: bool, label: str):
     guild_jobs(job.guild_id)[job.id] = job
+    save_job(job)
 
     # Respond first so the CoinDrop command doesn't land before the ack.
     await interaction.send(
@@ -334,6 +390,8 @@ async def start_job(interaction, job: Job, target, start_now: bool, label: str):
 
         if job.remaining_runs is not None and job.remaining_runs <= 0:
             remove_job(job.guild_id, job.id)
+        else:
+            save_job(job)
 
 
 # =========================
@@ -375,10 +433,13 @@ async def scheduler():
             except Exception as e:
                 print(f"Scheduler error (guild {guild_id}, job #{job_id}): {e}")
 
+            # Jobs that came due while the bot was down fire once here, then
+            # go back to their normal schedule.
             if job.remaining_runs is not None and job.remaining_runs <= 0:
                 remove_ids.append((guild_id, job_id))
             else:
                 job.next_run = now + roll_interval(job)
+                save_job(job)
 
     for guild_id, job_id in remove_ids:
         remove_job(guild_id, job_id)
@@ -402,8 +463,7 @@ async def on_ready():
 
 @bot.event
 async def on_guild_remove(guild):
-    jobs.pop(guild.id, None)
-    job_counters.pop(guild.id, None)
+    remove_guild(guild.id)
 
 
 # =========================
@@ -785,6 +845,7 @@ async def pause_job(
     job.paused = not job.paused
     if not job.paused:
         job.next_run = time.time() + roll_interval(job)
+    save_job(job)
 
     await interaction.send(
         f"{'Paused' if job.paused else 'Resumed'} job #{job_id}"
@@ -816,4 +877,5 @@ async def balance(
 
 
 if __name__ == "__main__":
+    load_jobs()
     bot.run(TOKEN)
